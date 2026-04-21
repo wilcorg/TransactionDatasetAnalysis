@@ -1,16 +1,17 @@
 import duckdb
-import pandas as pd
-import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
-
+import numpy as np
+import pandas as pd
+import seaborn as sns
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
 from utils import CARDS_PARQUET, TRANSACTIONS_PARQUET, USERS_PARQUET, q
 
+
 class EDA:
     """Exploratory Data Analysis (EDA) for Credit Card Transactions Dataset"""
+
     def __init__(self):
         self.figsize = (12, 5)
         self.figsq = (8, 6)
@@ -24,11 +25,14 @@ class EDA:
 
     def amount_sample(self, bins: int = 80) -> None:
         """Visualize the distribution of transaction amounts (raw and log-transformed)"""
-        amount_sample = q(self.con, """
+        amount_sample = q(
+            self.con,
+            """
             SELECT amount
             FROM transactions
             WHERE amount > 0
-            """)
+            """,
+        )
         _, axes = plt.subplots(1, 2, figsize=self.figsize)
         sns.histplot(amount_sample["amount"], bins=bins, ax=axes[0], color="steelblue")
         axes[0].set_title("Transaction Amount Distribution")
@@ -41,7 +45,9 @@ class EDA:
 
     def monthly_transactions(self) -> None:
         """Visualize monthly transaction volume and average amount over time"""
-        monthly = q(self.con, """
+        monthly = q(
+            self.con,
+            """
             SELECT txn_year, txn_month,
                 COUNT(*)        AS txn_count,
                 AVG(amount)     AS avg_amount,
@@ -49,7 +55,8 @@ class EDA:
             FROM transactions
             GROUP BY txn_year, txn_month
             ORDER BY txn_year, txn_month
-        """)
+        """,
+        )
         monthly["period"] = pd.to_datetime(
             monthly["txn_year"].astype(str) + "-" + monthly["txn_month"].astype(str).str.zfill(2)
         )
@@ -64,18 +71,21 @@ class EDA:
 
     def patterns(self) -> None:
         """Visualize transaction patterns by hour of day and day of week"""
-        time_stats = q(self.con, """
+        time_stats = q(
+            self.con,
+            """
             SELECT txn_hour, txn_dow,
                 COUNT(*)    AS txn_count,
                 AVG(amount) AS avg_amount,
                 SUM(has_error) AS error_count
             FROM transactions
             GROUP BY txn_hour, txn_dow
-        """)
+        """,
+        )
         hourly = time_stats.groupby("txn_hour")["txn_count"].sum().sort_index()
-        daily  = time_stats.groupby("txn_dow")["txn_count"].sum().sort_index()
-        dow_labels = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-        
+        daily = time_stats.groupby("txn_dow")["txn_count"].sum().sort_index()
+        dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
         _, axes = plt.subplots(1, 2, figsize=self.figsize)
         hourly.plot(kind="bar", ax=axes[0], color="steelblue")
         axes[0].set_title("Transactions by Hour of Day")
@@ -88,26 +98,32 @@ class EDA:
 
     def errors(self) -> None:
         """Visualize the most common transaction error types and the prevalence of cards on the dark web"""
-        error_counts = q(self.con, """
+        error_counts = q(
+            self.con,
+            """
             SELECT errors, COUNT(*) AS n
             FROM transactions
             WHERE has_error = 1
             GROUP BY errors
             ORDER BY n DESC
             LIMIT 10
-        """)
-        dark_web = q(self.con, """
+        """,
+        )
+        dark_web = q(
+            self.con,
+            """
             SELECT card_on_dark_web, COUNT(*) AS n
             FROM cards
             GROUP BY card_on_dark_web
-        """)
+        """,
+        )
         _, axes = plt.subplots(1, 2, figsize=self.figsize)
         axes[0].barh(error_counts["errors"], error_counts["n"], color="salmon")
         axes[0].set_title("Top Transaction Error Types")
         axes[0].invert_yaxis()
         dark_web.set_index("card_on_dark_web")["n"].plot(
-            kind="pie", ax=axes[1], autopct="%1.1f%%",
-            colors=["#69b3a2","#ff6b6b"], startangle=90)
+            kind="pie", ax=axes[1], autopct="%1.1f%%", colors=["#69b3a2", "#ff6b6b"], startangle=90
+        )
         axes[1].set_title("Card on Dark Web")
         axes[1].set_ylabel("")
         plt.tight_layout()
@@ -127,19 +143,32 @@ class EDA:
 
     def correlations(self) -> None:
         """Visualize correlations between key user-level features using a heatmap"""
-        self.user_agg["debt_to_income"] = \
-            self.user_agg["total_debt"] / self.user_agg["yearly_income"].replace(0, np.nan)
-        self.user_agg["income_per_card"] = \
-            self.user_agg["yearly_income"] / self.user_agg["num_credit_cards"].replace(0, np.nan)
+        self.user_agg["debt_to_income"] = self.user_agg["total_debt"] / self.user_agg["yearly_income"].replace(
+            0, np.nan
+        )
+        self.user_agg["income_per_card"] = self.user_agg["yearly_income"] / self.user_agg["num_credit_cards"].replace(
+            0, np.nan
+        )
 
         corr_cols = [
-            "avg_amount","credit_score","yearly_income","total_debt","per_capita_income",
-            "avg_credit_limit","num_credit_cards","debt_to_income","current_age",
-            "txn_count","total_errors","chip_ratio","has_dark_web_card"
+            "avg_amount",
+            "credit_score",
+            "yearly_income",
+            "total_debt",
+            "per_capita_income",
+            "avg_credit_limit",
+            "num_credit_cards",
+            "debt_to_income",
+            "current_age",
+            "txn_count",
+            "total_errors",
+            "chip_ratio",
+            "has_dark_web_card",
         ]
         _, ax = plt.subplots(figsize=(14, 10))
-        sns.heatmap(self.user_agg[corr_cols].corr(), annot=True, fmt=".2f",
-                    cmap="coolwarm", center=0, linewidths=0.5, ax=ax)
+        sns.heatmap(
+            self.user_agg[corr_cols].corr(), annot=True, fmt=".2f", cmap="coolwarm", center=0, linewidths=0.5, ax=ax
+        )
         ax.set_title("Correlation Matrix  (per-user aggregates)")
         plt.tight_layout()
         plt.savefig("plot_07_correlation_heatmap.png", dpi=150)
@@ -156,8 +185,7 @@ class EDA:
         self.user_agg["anomaly_score"] = iso.decision_function(X_scaled)
 
         n_anomalies = (self.user_agg["anomaly"] == -1).sum()
-        print(f"Flagged {n_anomalies} anomalous users "
-            f"({n_anomalies / len(self.user_agg) * 100:.1f}%)")
+        print(f"Flagged {n_anomalies} anomalous users ({n_anomalies / len(self.user_agg) * 100:.1f}%)")
 
         _, ax = plt.subplots(figsize=self.figsize)
         sns.histplot(self.user_agg["anomaly_score"], bins=60, color="steelblue", ax=ax)
@@ -169,9 +197,14 @@ class EDA:
         plt.savefig("plot_11_anomaly_scores.png", dpi=150)
 
         _, ax = plt.subplots(figsize=self.figsize)
-        sns.violinplot(data=self.user_agg, x="anomaly", y="avg_amount",
-                    order=[1, -1], ax=ax,
-                    palette={'1': "#69b3a2", '-1': "#ff6b6b"})
+        sns.violinplot(
+            data=self.user_agg,
+            x="anomaly",
+            y="avg_amount",
+            order=[1, -1],
+            ax=ax,
+            palette={"1": "#69b3a2", "-1": "#ff6b6b"},
+        )
         ax.set_xticks([0, 1])
         ax.set_xticklabels(["Normal", "Anomaly"])
         ax.set_title("Avg Transaction Amount: Normal vs Anomalous Users")
@@ -182,24 +215,26 @@ class EDA:
         """Print a summary of key statistics and findings from the EDA"""
         totals = q(self.con, "SELECT COUNT(*) AS n, AVG(amount) AS avg, MEDIAN(amount) AS med FROM transactions")
         errors = q(self.con, "SELECT SUM(has_error) AS n, AVG(has_error)*100 AS pct FROM transactions")
-        dark   = q(self.con, "SELECT COUNT(*) AS n FROM cards WHERE card_on_dark_web = 'Yes'")
+        dark = q(self.con, "SELECT COUNT(*) AS n FROM cards WHERE card_on_dark_web = 'Yes'")
 
         n_anomalies = (self.user_agg["anomaly"] == -1).sum()
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("SUMMARY")
-        print("="*60)
+        print("=" * 60)
         print(f"Total transactions   : {int(totals['n'][0]):>12,}")
         print(f"Unique users         : {self.user_agg['user_id'].nunique():>12,}")
         print(f"Avg txn amount       : {totals['avg'][0]:>12,.2f} $")
         print(f"Median txn amount    : {totals['med'][0]:>12,.2f} $")
         print(f"Transactions w/ error: {int(errors['n'][0]):>12,}  ({errors['pct'][0]:.2f}%)")
         print(f"Cards on dark web    : {int(dark['n'][0]):>12,}")
-        print(f"Anomalous users      : {n_anomalies:>12,}  ({n_anomalies/len(self.user_agg)*100:.2f}%)")
-        print("="*60)
+        print(f"Anomalous users      : {n_anomalies:>12,}  ({n_anomalies / len(self.user_agg) * 100:.2f}%)")
+        print("=" * 60)
 
     def _get_user_agg(self) -> pd.DataFrame:
-        return q(self.con, """
+        return q(
+            self.con,
+            """
             SELECT
                 t.user_id,
                 COUNT(*)            AS txn_count,
@@ -220,7 +255,8 @@ class EDA:
             JOIN cards c ON t.card_id = c.card_id AND t.user_id = c.user_id
             GROUP BY t.user_id, u.credit_score, u.yearly_income, u.total_debt,
                     u.per_capita_income, u.num_credit_cards, u.current_age, u.retirement_age
-        """)
+        """,
+        )
 
     def _setup_database(self) -> None:
         self.con.execute(f"""

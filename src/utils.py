@@ -1,16 +1,18 @@
 import os
+
 import duckdb
 import pandas as pd
 
-USERS_CSV        = "data/users_data.csv"
-CARDS_CSV        = "data/cards_data.csv"
+USERS_CSV = "data/users_data.csv"
+CARDS_CSV = "data/cards_data.csv"
 TRANSACTIONS_CSV = "data/transactions_data.csv"
 
-USERS_PARQUET        = "data/users.parquet"
-CARDS_PARQUET        = "data/cards.parquet"
+USERS_PARQUET = "data/users.parquet"
+CARDS_PARQUET = "data/cards.parquet"
 TRANSACTIONS_PARQUET = "data/transactions.parquet"
 
-def csv_to_parquet(con: duckdb.DuckDBPyConnection, csv_path: str, parquet_path: str, extra_read_opts: str="") -> None:
+
+def csv_to_parquet(con: duckdb.DuckDBPyConnection, csv_path: str, parquet_path: str, extra_read_opts: str = "") -> None:
     if os.path.exists(parquet_path):
         print(f"{parquet_path} already exists — skipping conversion")
         return
@@ -22,8 +24,10 @@ def csv_to_parquet(con: duckdb.DuckDBPyConnection, csv_path: str, parquet_path: 
     size_mb = os.path.getsize(parquet_path) / 1_048_576
     print(f"Done — {size_mb:.1f} MB")
 
+
 def q(con: duckdb.DuckDBPyConnection, sql: str) -> pd.DataFrame:
     return con.execute(sql).df()
+
 
 def test() -> None:
     con = duckdb.connect()

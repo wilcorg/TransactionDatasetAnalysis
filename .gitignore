@@ -1,5 +1,7 @@
-__pycache__/
-data/
-plots/
-.env
-venv/
+.venv/
+.ruff_cache/
+
+**/__pycache__/**
+
+dataset/cleaned/
+dataset/raw/
