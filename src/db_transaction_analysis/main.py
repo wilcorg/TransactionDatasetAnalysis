@@ -1,4 +1,4 @@
-from eda import EDA
+from db_transaction_analysis.eda import EDA
 
 
 def main():
