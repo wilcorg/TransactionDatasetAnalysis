@@ -1,12 +1,8 @@
 .venv/
-venv/
 .ruff_cache/
 
 **/__pycache__/**
 
-dataset/cleaned/
-dataset/raw/
-
+dataset/
 plots/
 
-__pycache__/
