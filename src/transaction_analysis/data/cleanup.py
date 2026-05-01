@@ -1,135 +1,118 @@
-import json
 import os
+from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
+from transaction_analysis.data import io
 from transaction_analysis.paths import FRAUD_DATASET_DIR
 
 
-def parse_currency(series: pd.Series) -> pd.Series:
-    """Remove leading '$', strip commas, cast to float."""
-    return series.astype(str).str.replace(r"[\$,]", "", regex=True).str.strip().replace("nan", np.nan).astype(float)
-
-
-def fill_na_with_unknown(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    for col in cols:
-        df[col] = df[col].fillna("Unknown")
+def datetime_to_date(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    df[col] = df[col].dt.date
     return df
 
 
-def map_binary_to_int(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    for col in cols:
-        df[col] = df[col].map({"Yes": 1, "No": 0, True: 1, False: 0})
-        df[col] = df[col].fillna(0).astype(int)
+def assert_no_missing_values(df: pd.DataFrame) -> pd.DataFrame:
+    for col in df.columns:
+        missing = df[col].isna().sum()
+        assert missing == 0, f"Column '{col}' has {missing} missing values"
     return df
 
 
-def impute_with_median(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    for col in cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-        df[col] = df[col].fillna(df[col].median()).astype(int)
+def impute_online(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    df.loc[df["merchant_city"] == "ONLINE", col] = "ONLINE"
     return df
 
 
-def run(force: bool = False) -> None:
-    out_transactions = FRAUD_DATASET_DIR / "cleaned" / "transactions.csv"
-    if out_transactions.exists() and not force:
-        print("Dataset already cleaned, skipping. Use `force=True` to re-run.")
-        return
-    os.makedirs(out_transactions.parent, exist_ok=True)
+def impute_errors(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    df.loc[df[col].isna(), col] = "No error"
+    return df
 
-    transactions = pd.read_csv(FRAUD_DATASET_DIR / "raw" / "transactions_data.csv")
-    cards = pd.read_csv(FRAUD_DATASET_DIR / "raw" / "cards_data.csv")
-    users = pd.read_csv(FRAUD_DATASET_DIR / "raw" / "users_data.csv")
 
-    with open(FRAUD_DATASET_DIR / "raw" / "train_fraud_labels.json") as f:
-        labels_raw = json.load(f)
+def join_year_month_to_datetime(df: pd.DataFrame, year_col: str, month_col: str, out_col: str) -> pd.DataFrame:
+    df[year_col] = pd.to_datetime(
+        {
+            "year": df[year_col].astype("int64"),
+            "month": df[month_col].astype("int64"),
+            "day": 1,
+        }
+    ).dt.date
+    df.rename(columns={year_col: out_col}, inplace=True)
+    return df.drop(columns=[month_col])
 
-    fraud_labels = (
-        pd.DataFrame.from_dict(labels_raw["target"], orient="index", columns=["fraud"])
-        .reset_index()
-        .rename(columns={"index": "id"})
-    )
 
-    num_cols_u = [
-        "current_age",
-        "retirement_age",
-        "birth_year",
-        "birth_month",
-        "latitude",
-        "longitude",
-        "credit_score",
-        "num_credit_cards",
-    ]
-    currency_cols_u = ["per_capita_income", "yearly_income", "total_debt"]
+def run(dataset_in_dir: Path, dataset_out_dir: Path, force: bool = False) -> None:
+    os.makedirs(dataset_out_dir, exist_ok=True)
 
-    transactions = (
-        transactions.assign(amount=lambda df: parse_currency(df["amount"]))
-        .assign(date=lambda df: pd.to_datetime(df["date"], errors="coerce"))
-        .pipe(fill_na_with_unknown, ["use_chip", "merchant_city", "merchant_state", "errors"])
-        .assign(zip=lambda df: df["zip"].astype(str).str.zfill(5).replace("nan", "Unknown"))
-        .assign(mcc=lambda df: df["mcc"].fillna(0).astype(int))
-    )
+    def cleanup_cards(in_file: Path, out_file: Path) -> None:
+        if out_file.exists() and not force:
+            print("Cards already cleaned, skipping. Use `force=True` to re-run.")
+            return
 
-    cards = (
-        cards.assign(credit_limit=lambda df: parse_currency(df["credit_limit"]))
-        .pipe(map_binary_to_int, ["has_chip", "card_on_dark_web"])
-        .assign(acct_open_date=lambda df: pd.to_datetime(df["acct_open_date"], errors="coerce"))
-        .assign(expires=lambda df: pd.to_datetime(df["expires"], format="%m/%Y", errors="coerce"))
-        .pipe(impute_with_median, ["year_pin_last_changed"])
-        .assign(cvv=lambda df: pd.to_numeric(df["cvv"], errors="coerce"))
-        .assign(num_cards_issued=lambda df: df["num_cards_issued"].fillna(1).astype(int))
-        .pipe(fill_na_with_unknown, ["card_brand", "card_type"])
-    )
+        (
+            io.read_parquet(in_file)
+            .rename(columns={"id": "card_id"})
+            .pipe(datetime_to_date, "expires")
+            .pipe(datetime_to_date, "acct_open_date")
+            .rename(columns={"credit_limit": "credit_limit_usd"})
+            .pipe(assert_no_missing_values)
+            .pipe(io.to_parquet, out_file)
+        )
 
-    users = (
-        users.assign(per_capita_income=lambda df: parse_currency(df["per_capita_income"]))
-        .assign(yearly_income=lambda df: parse_currency(df["yearly_income"]))
-        .assign(total_debt=lambda df: parse_currency(df["total_debt"]))
-        .pipe(impute_with_median, num_cols_u)
-        .pipe(impute_with_median, currency_cols_u)
-        .pipe(fill_na_with_unknown, ["gender", "address"])
-    )
+    def cleanup_mcc(in_file: Path, out_file: Path) -> None:
+        if out_file.exists() and not force:
+            print("MCC codes already cleaned, skipping. Use `force=True` to re-run.")
+            return
 
-    # fmt: off
-    fraud_labels = (
-        fraud_labels
-        .assign(id=lambda df: df["id"].astype(transactions["id"].dtype))
-        .assign(fraud=lambda df: df["fraud"].map({"Yes": 1, "No": 0}).astype(int))
-    )
-    # fmt: on
+        (io.read_parquet(in_file).pipe(assert_no_missing_values).pipe(io.to_parquet, out_file))
 
-    # Merge labels onto transactions (left join keeps all transactions)
-    transactions = transactions.merge(fraud_labels, on="id", how="left")
+    def cleanup_fraud_labels(in_file: Path, out_file: Path) -> None:
+        if out_file.exists() and not force:
+            print("Fraud labels already cleaned, skipping. Use `force=True` to re-run.")
+            return
 
-    # Rows with no label are test-set transactions – leave fraud as NaN
-    print(f"Labelled transactions : {transactions['fraud'].notna().sum():,}")
-    print(f"Unlabelled (test set) : {transactions['fraud'].isna().sum():,}")
+        (io.read_parquet(in_file).pipe(assert_no_missing_values).pipe(io.to_parquet, out_file))
 
-    print("\n── transactions ──")
-    print(transactions.dtypes)
-    print(transactions.isnull().sum())
+    def cleanup_transactions(in_file: Path, out_file: Path) -> None:
+        if out_file.exists() and not force:
+            print("Transactions already cleaned, skipping. Use `force=True` to re-run.")
+            return
 
-    print("\n── cards ──")
-    print(cards.dtypes)
-    print(cards.isnull().sum())
+        (
+            io.read_parquet(in_file)
+            .rename(columns={"id": "transaction_id"})
+            .rename(columns={"amount": "amount_usd"})
+            .rename(columns={"use_chip": "trasaction_type"})
+            .pipe(impute_online, "merchant_state")
+            .pipe(impute_online, "zip")
+            .pipe(impute_errors, "errors")
+            .pipe(assert_no_missing_values)
+            .pipe(io.to_parquet, out_file)
+        )
 
-    print("\n── users ──")
-    print(users.dtypes)
-    print(users.isnull().sum())
+    def cleanup_users(in_file: Path, out_file: Path) -> None:
+        if out_file.exists() and not force:
+            print("Users already cleaned, skipping. Use `force=True` to re-run.")
+            return
 
-    # Uncomment if you want a single modelling-ready DataFrame.
+        (
+            io.read_parquet(in_file)
+            .drop(columns=["current_age"])
+            .pipe(join_year_month_to_datetime, "birth_year", "birth_month", "birth_date")
+            .drop(columns=["address", "latitude", "longitude"])
+            .rename(columns={"per_capita_income": "per_capita_income_usd"})
+            .rename(columns={"yearly_income": "yearly_income_usd"})
+            .rename(columns={"total_debt": "total_debt_usd"})
+            .pipe(assert_no_missing_values)
+            .pipe(io.to_parquet, out_file)
+        )
 
-    dataset = transactions.merge(cards.add_prefix("card_"), left_on="card_id", right_on="card_id", how="left").merge(
-        users.add_prefix("user_"), left_on="client_id", right_on="user_id", how="left"
-    )
-    print(f"\nFull dataset shape: {dataset.shape}")
-
-    dataset.to_csv(out_transactions, index=False)
-
-    print("\nPreprocessing complete.")
+    cleanup_cards(dataset_in_dir / "cards.parquet", dataset_out_dir / "cards.parquet")
+    cleanup_mcc(dataset_in_dir / "mcc_codes.parquet", dataset_out_dir / "mcc_codes.parquet")
+    cleanup_fraud_labels(dataset_in_dir / "fraud_labels.parquet", dataset_out_dir / "fraud_labels.parquet")
+    cleanup_transactions(dataset_in_dir / "transactions.parquet", dataset_out_dir / "transactions.parquet")
+    cleanup_users(dataset_in_dir / "users.parquet", dataset_out_dir / "users.parquet")
 
 
 if __name__ == "__main__":
-    run(force=True)
+    run(Path(FRAUD_DATASET_DIR / "preprocessed"), Path(FRAUD_DATASET_DIR / "cleaned"), force=True)

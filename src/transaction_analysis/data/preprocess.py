@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow as pa
 
+from transaction_analysis.data import io
 from transaction_analysis.paths import FRAUD_DATASET_DIR
 
 
@@ -42,18 +43,17 @@ def yes_no_to_bool(df: pd.DataFrame, col: str) -> pd.DataFrame:
     return df
 
 
-def run(force: bool = False) -> None:
-    os.makedirs(FRAUD_DATASET_DIR / "cleaned", exist_ok=True)
+def run(dataset_in_dir: Path, dataset_out_dir: Path, force: bool = False) -> None:
+    os.makedirs(dataset_out_dir, exist_ok=True)
 
-    def process_transactions(input_dataset: Path, output_dataset: Path) -> None:
-        if output_dataset.exists() and not force:
+    def process_transactions(in_file: Path, out_file: Path) -> None:
+        if out_file.exists() and not force:
             print("Transactions already preprocessed, skipping. Use `force=True` to re-run.")
             return
 
-        transactions = pd.read_csv(input_dataset, engine="pyarrow", dtype_backend="pyarrow")
-
-        transactions = (
-            transactions.pipe(int64_downcast, "id")
+        (
+            io.read_csv(in_file)
+            .pipe(int64_downcast, "id")
             .pipe(str_to_datetime, "date")
             .pipe(int64_downcast, "client_id")
             .pipe(int64_downcast, "card_id")
@@ -65,18 +65,18 @@ def run(force: bool = False) -> None:
             .pipe(zip_to_category, "zip")
             .pipe(int64_downcast, "mcc")
             .pipe(str_to_category, "errors")
+            .set_index("id")
+            .pipe(io.to_parquet, out_file)
         )
 
-        transactions.to_parquet(output_dataset, compression="zstd")
-
-    def process_users(input_dataset: Path, output_dataset: Path) -> None:
-        if output_dataset.exists() and not force:
+    def process_users(in_file: Path, out_file: Path) -> None:
+        if out_file.exists() and not force:
             print("Users already preprocessed, skipping. Use `force=True` to re-run.")
             return
 
-        users = pd.read_csv(input_dataset, engine="pyarrow", dtype_backend="pyarrow")
-        users = (
-            users.pipe(int64_downcast, "id")
+        (
+            io.read_csv(in_file)
+            .pipe(int64_downcast, "id")
             .pipe(int64_downcast, "current_age")
             .pipe(int64_downcast, "retirement_age")
             .pipe(int64_downcast, "birth_year")
@@ -87,18 +87,18 @@ def run(force: bool = False) -> None:
             .pipe(currency_to_decimal, "total_debt")
             .pipe(int64_downcast, "credit_score")
             .pipe(int64_downcast, "num_credit_cards")
+            .set_index("id")
+            .pipe(io.to_parquet, out_file)
         )
 
-        users.to_parquet(output_dataset, compression="zstd")
-
-    def process_cards(input_dataset: Path, output_dataset: Path) -> None:
-        if output_dataset.exists() and not force:
+    def process_cards(in_file: Path, out_file: Path) -> None:
+        if out_file.exists() and not force:
             print("Cards already preprocessed, skipping. Use `force=True` to re-run.")
             return
 
-        cards = pd.read_csv(input_dataset, engine="pyarrow", dtype_backend="pyarrow")
-        cards = (
-            cards.pipe(int64_downcast, "id")
+        (
+            io.read_csv(in_file)
+            .pipe(int64_downcast, "id")
             .pipe(int64_downcast, "client_id")
             .pipe(str_to_category, "card_brand")
             .pipe(str_to_category, "card_type")
@@ -110,62 +110,70 @@ def run(force: bool = False) -> None:
             .pipe(month_year_to_datetime, "acct_open_date")
             .pipe(int64_downcast, "year_pin_last_changed")
             .pipe(yes_no_to_bool, "card_on_dark_web")
+            .set_index("id")
+            .pipe(io.to_parquet, out_file)
         )
 
-        cards.to_parquet(output_dataset, compression="zstd")
-
-    def process_mcc_codes(input_dataset: Path, output_dataset: Path) -> None:
-        if output_dataset.exists() and not force:
+    def process_mcc_codes(in_file: Path, out_file: Path) -> None:
+        if out_file.exists() and not force:
             print("MCC codes already preprocessed, skipping. Use `force=True` to re-run.")
             return
 
-        mcc_codes: pd.DataFrame = (
-            pd.read_json(input_dataset, typ="series", dtype_backend="pyarrow")
-            .rename_axis("mcc")
-            .reset_index(name="description")
+        (
+            io.read_json(in_file, typ="series")
+            .rename_axis("id")
+            .rename("description")
+            .reset_index()
+            .pipe(int64_downcast, "id")
+            .set_index("id")
+            .pipe(io.to_parquet, out_file)
         )
-        mcc_codes = mcc_codes.pipe(int64_downcast, "mcc")
 
-        mcc_codes.to_parquet(output_dataset, compression="zstd")
-
-    def process_fraud_labels(input_dataset: Path, output_dataset: Path) -> None:
-        if output_dataset.exists() and not force:
+    def process_fraud_labels(in_file: Path, out_file: Path) -> None:
+        if out_file.exists() and not force:
             print("Fraud labels already preprocessed, skipping. Use `force=True` to re-run.")
             return
 
         # fmt: off
-        fraud_labels = (
-            pd.read_json(input_dataset, dtype_backend="pyarrow")
+        (
+            io.read_json(in_file)
             .rename_axis("id")
-            .reset_index(name="fraud")
+            .rename(columns={"target": "fraud"})
+            .reset_index()
+            .pipe(int64_downcast, "id")
+            .pipe(yes_no_to_bool, "fraud")
+            .set_index("id")
+            .pipe(io.to_parquet, out_file)
         )
         # fmt: on
-        fraud_labels = fraud_labels.pipe(int64_downcast, "id")
-        fraud_labels.to_parquet(output_dataset, compression="zstd")
 
     # fmt: off
     process_transactions(
-        FRAUD_DATASET_DIR / "raw" / "transactions_data.csv",
-        FRAUD_DATASET_DIR / "cleaned" / "transactions.parquet"
+        dataset_in_dir / "transactions_data.csv",
+        dataset_out_dir / "transactions.parquet",
     )
     process_users(
-        FRAUD_DATASET_DIR / "raw" / "users_data.csv",
-        FRAUD_DATASET_DIR / "cleaned" / "users.parquet"
+        dataset_in_dir / "users_data.csv",
+        dataset_out_dir / "users.parquet",
     )
     process_cards(
-        FRAUD_DATASET_DIR / "raw" / "cards_data.csv",
-        FRAUD_DATASET_DIR / "cleaned" / "cards.parquet"
+        dataset_in_dir / "cards_data.csv",
+        dataset_out_dir / "cards.parquet",
     )
     process_mcc_codes(
-        FRAUD_DATASET_DIR / "raw" / "mcc_codes.json",
-        FRAUD_DATASET_DIR / "cleaned" / "mcc_codes.parquet"
+        dataset_in_dir / "mcc_codes.json",
+        dataset_out_dir / "mcc_codes.parquet",
     )
     process_fraud_labels(
-        FRAUD_DATASET_DIR / "raw" / "train_fraud_labels.json",
-        FRAUD_DATASET_DIR / "cleaned" / "fraud_labels.parquet"
+        dataset_in_dir / "train_fraud_labels.json",
+        dataset_out_dir / "fraud_labels.parquet",
     )
     # fmt: on
 
 
 if __name__ == "__main__":
-    run(force=True)
+    run(
+        dataset_in_dir=FRAUD_DATASET_DIR / "raw",
+        dataset_out_dir=FRAUD_DATASET_DIR / "preprocessed",
+        force=True,
+    )
